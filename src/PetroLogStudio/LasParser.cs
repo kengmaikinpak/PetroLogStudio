@@ -20,8 +20,8 @@ namespace PetroLogStudio.Parsing
     ///</summary>
     public class LasParser
     {
-		private bool _isWrapped = false;
-		private readonly List<double?> _rowBuffer = new();
+		private static readonly char[] WhitespaceChars = { ' ', '\t' };
+		bool isWrapped = false;
 		
         public WellLog ParseFile(string filePath)
         {
@@ -39,49 +39,49 @@ namespace PetroLogStudio.Parsing
 
             LasSection currentSection = LasSection.None;
 
+			var orderedCurves = new List<CurveData>();
+			int currentColumn = 0;
+
             try
             {
                 using var reader = new StreamReader(filePath);
                 string? line;
                 int lineNumber = 0;
-				int curveIndex = 0;
 
                 while ((line = reader.ReadLine()) != null)
                 {
-                    lineNumber++;
-                    line = line.Trim();
+					ReadOnlySpan<char> lineSpan = line.AsSpan().Trim();
 
-                    if (string.IsNullOrWhiteSpace(line) || line.StartsWith("#"))
-                    {
-                        continue; // Skip empty lines and comments
-                    }
+					if (lineSpan.IsEmpty || lineSpan[0] == '#')
+					{
+						continue;
+					}
 
-                    if (line.StartsWith("~"))
-                    {
-                        currentSection = DetermineSection(line);
-                        continue;
-                    
-                    }
+					if (lineSpan[0] == '~')
+					{
+						currentSection = DetermineSection(lineSpan);
+						continue;
+					}
 
                     switch (currentSection)
 					{
 						case LasSection.Version:
-							ParseVersionInfo(line);
-							break;
+                            ParseVersionInfo(lineSpan);
+                            break;
                         case LasSection.Well:
-                            ParseWellInfo(line, well);
+                            ParseWellInfo(lineSpan, well);
                             break;
                         case LasSection.Curve:
-                            ParseCurveDefinition(line, well, ref curveIndex);
+                            ParseCurveDefinition(lineSpan, well, orderedCurves);
                             break;
                         case LasSection.AsciiData:
-                            ParseDataLine(line, well, lineNumber);
+                            ParseDataLine(lineSpan, well, lineNumber, orderedCurves, ref currentColumn);
                             break;
                     }
                 }
-				if (_rowBuffer.Count > 0)
+				if (currentColumn != 0)
 				{
-					well.ParseErrors.Add($"Incomplete data at end of file: {_rowBuffer.Count} orphaned values discarded.");
+					well.ParseErrors.Add($"Incomplete data at end of file: {currentColumn} orphaned values discarded.");
 				}
             }
             catch (Exception ex)
@@ -92,7 +92,7 @@ namespace PetroLogStudio.Parsing
             return well;
         }
 
-        private LasSection DetermineSection(string line)
+        private LasSection DetermineSection(ReadOnlySpan<char> line)
         {
             char sectionKey = char.ToUpperInvariant(line.Length > 1 ? line[1] : ' ');
             return sectionKey switch
@@ -106,18 +106,18 @@ namespace PetroLogStudio.Parsing
             };
         }
 
-		private void ParseVersionInfo(string line)
-		{
-			var (mnemonic, _, value) = SplitHeaderLine(line);
-			if (mnemonic.Equals("WRAP", StringComparison.OrdinalIgnoreCase))
-			{
-				_isWrapped = value.Equals("YES", StringComparison.OrdinalIgnoreCase);
-			}
-		}
+		private void ParseVersionInfo(ReadOnlySpan<char> line)
+        {
+            var (mnemonic, _, value, _) = SplitHeaderLine(line);
+            if (mnemonic.Equals("WRAP", StringComparison.OrdinalIgnoreCase))
+            {
+                isWrapped = value.StartsWith("YES", StringComparison.OrdinalIgnoreCase);
+            }
+        }
 
-        private void ParseWellInfo(string line, WellLog well)
+        private void ParseWellInfo(ReadOnlySpan<char> line, WellLog well)
 		{
-			var (mnemonic, unit, value) = SplitHeaderLine(line);
+			var (mnemonic, _, value, description) = SplitHeaderLine(line);
 
             switch (mnemonic.ToUpperInvariant())
             {
@@ -127,24 +127,28 @@ namespace PetroLogStudio.Parsing
                         well.WellName = value;
                     }
                     break;
+
                 case "NULL":
                     if (double.TryParse(value, NumberStyles.Any, CultureInfo.InvariantCulture, out double nullValue))
                     {
                         well.NullValue = nullValue;
                     }
                     break;
+
                 case "STRT":
                     if (double.TryParse(value, NumberStyles.Any, CultureInfo.InvariantCulture, out double startVal))
                     {
                         well.StartDepth = startVal;
                     }
                     break;
+
                 case "STOP":
                     if (double.TryParse(value, NumberStyles.Any, CultureInfo.InvariantCulture, out double stopVal))
                     {
                         well.StopDepth = stopVal;
                     }
                     break;
+					
                 case "STEP":
                     if (double.TryParse(value, NumberStyles.Any, CultureInfo.InvariantCulture, out double stepVal))
                     {
@@ -152,12 +156,11 @@ namespace PetroLogStudio.Parsing
                     }
                     break;
             }
-                    
 		}
 
-        private void ParseCurveDefinition(string line, WellLog well, ref int curveIndex)
+        private void ParseCurveDefinition(ReadOnlySpan<char> line, WellLog well, List<CurveData> orderedCurves)
 		{
-			var (mnemonic, unit, description) = SplitHeaderLine(line);
+			var (mnemonic, unit, _, description) = SplitHeaderLine(line);
 
             if (string.IsNullOrWhiteSpace(mnemonic)) return;
 
@@ -166,88 +169,92 @@ namespace PetroLogStudio.Parsing
                 Mnemonic = mnemonic.ToUpperInvariant(),
                 Unit = unit,
                 Description = description,
-                ColumnIndex = curveIndex++
+                ColumnIndex = orderedCurves.Count
             };
 
-            if (!well.Curves.ContainsKey(definition.Mnemonic))
-            {
-                well.Curves[definition.Mnemonic] = new CurveData(definition);
-            }
-            else
-			{
-				string uniqueKey = $"{definition.Mnemonic}_{definition.ColumnIndex}";
-                well.Curves[uniqueKey] = new CurveData(definition);
-			}
+			var curveData = new CurveData(definition);
+			orderedCurves.Add(curveData);
+
+            string key = well.Curves.ContainsKey(definition.Mnemonic) 
+				? $"{definition.Mnemonic}_{orderedCurves.Count}" 
+				: definition.Mnemonic;
+
+			well.Curves[key] = curveData;
 		}
 
-		private void ParseDataLine(string line, WellLog well, int lineNumber)
+		private void ParseDataLine(ReadOnlySpan<char> line, WellLog well, int lineNumber, List<CurveData> orderedCurves, ref int currentColumn)
 		{
-			var tokens = line.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
-			int expectedCurves = well.Curves.Count;
-
+			int expectedCurves = orderedCurves.Count;
 			if (expectedCurves == 0) return;
 
-			foreach (var token in tokens)
+			double? nullVal = well.NullValue;
+
+			while (!line.IsEmpty)
 			{
-				if (double.TryParse(token, NumberStyles.Any, CultureInfo.InvariantCulture, out double value))
+				int spaceIndex = line.IndexOfAny(WhitespaceChars);
+
+				ReadOnlySpan<char> token;
+
+				if (spaceIndex >= 0)
 				{
-					if (well.NullValue.HasValue && Math.Abs(value - well.NullValue.Value) < 0.001)
-					{
-						_rowBuffer.Add(null); // Treat as null value
-					}
-					else
-					{
-						_rowBuffer.Add(value);
-					}
+					token = line.Slice(0, spaceIndex);
+					line = line.Slice(spaceIndex + 1).TrimStart();
 				}
 				else
 				{
-					_rowBuffer.Add(null); // Invalid number, treat as null
+					token = line;
+					line = ReadOnlySpan<char>.Empty;
 				}
-			}
 
-			if (_rowBuffer.Count == expectedCurves)
-			{
-				int colIndex = 0;
-				foreach (var kvp in well.Curves)
+				if (token.IsEmpty) continue;
+
+				double? valToAdd = null;
+				if (double.TryParse(token, NumberStyles.Float | NumberStyles.AllowThousands, CultureInfo.InvariantCulture, out double value))
 				{
-					kvp.Value.Values.Add(_rowBuffer[colIndex]);
-					colIndex++;
+					if (!nullVal.HasValue || Math.Abs(value - nullVal.Value) >= 0.001)
+					{
+						valToAdd = value;
+					}
 				}
-				_rowBuffer.Clear();
+
+				orderedCurves[currentColumn].Values.Add(valToAdd);
+
+				currentColumn++;
+				if (currentColumn == expectedCurves)
+				{
+					currentColumn = 0; // Reset for next row
+				}
 			}
 		}
 
-        private (string mnemonic, string unit, string value) SplitHeaderLine(string line)
+        private (string mnemonic, string unit, string value, string description) SplitHeaderLine(ReadOnlySpan<char> line)
 		{
 			// CWLS format: MNEM.UNIT  VALUE : DESCRIPTION
             int colonIndex = line.IndexOf(':');
-            string mainPart = colonIndex >= 0 ? line.Substring(0, colonIndex).Trim() : line;
-            string description = colonIndex >= 0 ? line.Substring(colonIndex + 1).Trim() : string.Empty;
+            ReadOnlySpan<char> mainPart = colonIndex >= 0 ? line.Slice(0, colonIndex).Trim() : line;
+            string description = colonIndex >= 0 ? line.Slice(colonIndex + 1).Trim().ToString() : string.Empty;
 
             // Split mainPart into mnemonic and unit
             int dotIndex = mainPart.IndexOf('.');
-            if (dotIndex < 0) return (mainPart.Trim(), string.Empty, description); // No unit found
+            if (dotIndex < 0) 
+				return (mainPart.Trim().ToString(), string.Empty, string.Empty, description); // No unit found
 
-            string mnemonic = mainPart.Substring(0, dotIndex).Trim();
-            string afterdot = mainPart.Substring(dotIndex + 1);
-
-			string unit = string.Empty;
-			string value = string.Empty;
+            string mnemonic = mainPart.Slice(0, dotIndex).Trim().ToString();
+            ReadOnlySpan<char> afterdot = mainPart.Slice(dotIndex + 1);
 
             // Split rest into unit and value
-            int spaceIndex = afterdot.IndexOfAny(new[] { ' ', '\t' });
+            int spaceIndex = afterdot.IndexOfAny(WhitespaceChars);
             if (spaceIndex >= 0)
 			{
-				unit = afterdot.Substring(0, spaceIndex).Trim();
-            	value = afterdot.Substring(spaceIndex).Trim();
+				string unit = afterdot.Slice(0, spaceIndex).Trim().ToString();
+            	string value = afterdot.Slice(spaceIndex).Trim().ToString();
+				return (mnemonic, unit, value, description);
 			}
 			else
 			{
-				unit = afterdot.Trim();
-				value = string.Empty;
+				string value = afterdot.Trim().ToString();
+				return (mnemonic, string.Empty, value, description);
 			}
-            return (mnemonic, unit, value);
 		}
     }
 }

@@ -6,11 +6,30 @@ namespace PetroLogStudio
 {
     internal class Program
     {
+		static string GetTestDataPath(string fileName)
+			{
+				var currentDir = new DirectoryInfo(AppDomain.CurrentDomain.BaseDirectory);
+
+				while (currentDir != null)
+				{
+					string candidatePath = Path.Combine(currentDir.FullName, "TestData", fileName);
+					if (File.Exists(candidatePath))
+					{
+						return candidatePath;
+					}
+
+					currentDir = currentDir.Parent;
+				}
+
+				return Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "TestData", fileName);
+			}
+
         static void Main(string[] args)
         {
-            string testFilePath = @"C:\Users\Legion5\Zteelers\My Project eiei\test-swe-intern\TestData\39399.LAS";
+			string fileName = "4200344985_TBSU 113H_MSS_Semblance.las";
+			string testFilePath = GetTestDataPath(fileName);
 
-            if (!File.Exists(testFilePath))
+			if (!File.Exists(testFilePath))
             {
                 Console.WriteLine($"[ERROR] File not found at: {testFilePath}");
                 return;
