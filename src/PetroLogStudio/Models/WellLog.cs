@@ -13,6 +13,6 @@ namespace PetroLogStudio.Models
 
 		public Dictionary<string, CurveData> Curves { get; set; } = new Dictionary<string, CurveData>();
 		public List<string> ParseErrors { get; set; } = new List<string>();
-		public List<string> ConditionalWarnings { get; set; } = new List<string>();
+		public List<string> ConditioningLogs { get; set; } = new List<string>();
 	}
 }

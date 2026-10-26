@@ -4,86 +4,102 @@ using PetroLogStudio.Parsing;
 
 namespace PetroLogStudio
 {
-    internal class Program
-    {
+	internal class Program
+	{
 		static string GetTestDataPath(string fileName)
+		{
+			var currentDir = new DirectoryInfo(AppDomain.CurrentDomain.BaseDirectory);
+
+			while (currentDir != null)
 			{
-				var currentDir = new DirectoryInfo(AppDomain.CurrentDomain.BaseDirectory);
-
-				while (currentDir != null)
+				string candidatePath = Path.Combine(currentDir.FullName, "TestData", fileName);
+				if (File.Exists(candidatePath))
 				{
-					string candidatePath = Path.Combine(currentDir.FullName, "TestData", fileName);
-					if (File.Exists(candidatePath))
-					{
-						return candidatePath;
-					}
-
-					currentDir = currentDir.Parent;
+					return candidatePath;
 				}
 
-				return Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "TestData", fileName);
+				currentDir = currentDir.Parent;
 			}
 
-        static void Main(string[] args)
-        {
-			string fileName = "4200344985_TBSU 113H_MSS_Semblance.las";
+			return Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "TestData", fileName);
+		}
+
+		static void Main(string[] args)
+		{
+			string fileName = "4231735947_OPAL_UNIVERSITY_6-15_2_RTEX_ZDL_CN_DSL_MAIN_LAS.las";
 			string testFilePath = GetTestDataPath(fileName);
 
 			if (!File.Exists(testFilePath))
-            {
-                Console.WriteLine($"[ERROR] File not found at: {testFilePath}");
-                return;
-            }
+			{
+				Console.WriteLine($"[ERROR] File not found at: {testFilePath}");
+				return;
+			}
 
-            Console.WriteLine($"Testing LasParser with: {Path.GetFileName(testFilePath)}");
-            Console.WriteLine(new string('-', 50));
+			Console.WriteLine($"Testing LasParser with: {Path.GetFileName(testFilePath)}");
+			Console.WriteLine(new string('-', 50));
 
-            var parser = new LasParser();
-            var well = parser.ParseFile(testFilePath);
+			var parser = new LasParser();
+			var well = parser.ParseFile(testFilePath);
 
-            Console.WriteLine("\n[1] Well Header Information:");
-            Console.WriteLine($"Well Name   : {well.WellName}");
-            Console.WriteLine($"Null Value  : {well.NullValue}");
-            Console.WriteLine($"Start Depth : {well.StartDepth}");
-            Console.WriteLine($"Stop Depth  : {well.StopDepth}");
-            Console.WriteLine($"Step        : {well.Step}");
+			Console.WriteLine("\n[1] Well Header Information:");
+			Console.WriteLine($"Well Name   : {well.WellName}");
+			Console.WriteLine($"Null Value  : {well.NullValue}");
+			Console.WriteLine($"Start Depth : {well.StartDepth}");
+			Console.WriteLine($"Stop Depth  : {well.StopDepth}");
+			Console.WriteLine($"Step        : {well.Step}");
 
-            Console.WriteLine($"\n[2] Curves Discovered ({well.Curves.Count} total):");
-            foreach (var kvp in well.Curves)
-            {
-                var def = kvp.Value.Definition;
-                Console.WriteLine($"  - Col {def.ColumnIndex}: {def.Mnemonic,-10} | Unit: {def.Unit,-8} | Desc: {def.Description}");
-            }
+			Console.WriteLine($"\n[2] Curves Discovered ({well.Curves.Count} total):");
+			foreach (var kvp in well.Curves)
+			{
+				var def = kvp.Value.Definition;
+				Console.WriteLine($"  - Col {def.ColumnIndex}: {def.Mnemonic,-10} | Unit: {def.Unit,-8} | Desc: {def.Description}");
+			}
 
-            Console.WriteLine("\n[3] Data Section Verification:");
-            if (well.Curves.ContainsKey("DEPT"))
-            {
-                var deptCurve = well.Curves["DEPT"];
-                Console.WriteLine($"Total Depth Rows: {deptCurve.Values.Count}");
-                if (deptCurve.Values.Count > 0)
-                {
-                    Console.WriteLine($"First Depth Value: {deptCurve.Values[0]}");
-                    Console.WriteLine($"Last Depth Value : {deptCurve.Values[^1]}");
-                }
-            }
-            else
-            {
-                Console.WriteLine("Warning: 'DEPT' mnemonic not found directly. Check available curve keys.");
-            }
+			Console.WriteLine("\n[3] Data Section Verification:");
+			if (well.Curves.ContainsKey("DEPT"))
+			{
+				var deptCurve = well.Curves["DEPT"];
+				Console.WriteLine($"Total Depth Rows: {deptCurve.Values.Count}");
+				if (deptCurve.Values.Count > 0)
+				{
+					Console.WriteLine($"First Depth Value: {deptCurve.Values[0]}");
+					Console.WriteLine($"Last Depth Value : {deptCurve.Values[^1]}");
+				}
+			}
+			else
+			{
+				Console.WriteLine("Warning: 'DEPT' mnemonic not found directly. Check available curve keys.");
+			}
 
-            Console.WriteLine("\n[4] Parse Errors & Warnings:");
-            if (well.ParseErrors.Count == 0)
-            {
-                Console.WriteLine("No parsing errors encountered! Clean parse.");
-            }
-            else
-            {
-                Console.WriteLine($"Total errors: {well.ParseErrors.Count}");
-                foreach (var err in well.ParseErrors)
-                {
-                    Console.WriteLine($"  ! {err}");
-                }
-            }
-        }
-    }
+			Console.WriteLine("\n[4] Parse Errors & Warnings:");
+			if (well.ParseErrors.Count == 0)
+			{
+				Console.WriteLine("No parsing errors encountered! Clean parse.");
+			}
+			else
+			{
+				Console.WriteLine($"Total errors: {well.ParseErrors.Count}");
+				foreach (var err in well.ParseErrors)
+				{
+					Console.WriteLine($"  ! {err}");
+				}
+			}
+
+			var conditioner = new PetroLogStudio.Conditioning.DataConditioner();
+			conditioner.ConditionWell(well);
+
+			Console.WriteLine("\n[5] Data Conditioning Report:");
+			foreach (var log in well.ConditioningLogs)
+			{
+				Console.WriteLine($"  * {log}");
+			}
+
+			if (well.Curves.TryGetValue("DEPT", out var conditionedDept) && conditionedDept.Values.Count > 0)
+			{
+				Console.WriteLine($"\n[6] Post-Conditioning Depth Verification:");
+				Console.WriteLine($"  First Depth: {conditionedDept.Values[0]}");
+				Console.WriteLine($"  Last Depth : {conditionedDept.Values[^1]}");
+			}
+		}
+	}
 }
