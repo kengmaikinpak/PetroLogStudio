@@ -1,6 +1,8 @@
 ﻿using System;
 using System.IO;
 using PetroLogStudio.Parsing;
+using PetroLogStudio.Conditioning;
+using PetroLogStudio.Plotting;
 
 namespace PetroLogStudio
 {
@@ -100,6 +102,9 @@ namespace PetroLogStudio
 				Console.WriteLine($"  First Depth: {conditionedDept.Values[0]}");
 				Console.WriteLine($"  Last Depth : {conditionedDept.Values[^1]}");
 			}
+
+			var plotter = new PetroLogStudio.Plotting.LogPlotter();
+			plotter.GenerateWellPlot(well, "output_plots");
 		}
 	}
 }
