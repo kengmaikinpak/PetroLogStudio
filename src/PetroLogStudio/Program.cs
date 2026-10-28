@@ -31,7 +31,7 @@ namespace PetroLogStudio
 
 		static void Main(string[] args)
 		{
-			string fileName = "4246138181_UNIV_4_23_1_R1A_Repeat_DSLT_HNGC_HNGS_HGNS_LEH_GenericV12.las";
+			string fileName = "testflie.las";
 			string testFilePath = GetTestDataPath(fileName);
 
 			// 1. Verify file existence before processing
@@ -126,7 +126,7 @@ namespace PetroLogStudio
 			plotter.GenerateWellPlot(well, "output_plots");
 
 			// Optional: Entry point for batch processing all LAS files in TestData
-			var batch = new BatchProcessor();
+			// var batch = new BatchProcessor();
 			// batch.ProcessDirectory(FindTestDataDirectory(), @"./outputFolder");
 		}
 	}
