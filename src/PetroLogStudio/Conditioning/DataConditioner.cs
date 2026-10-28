@@ -274,7 +274,39 @@ namespace PetroLogStudio.Conditioning
 				}
 			}
 
-			// 4. Remove Flatline / Frozen sensor dummy values FIRST (before spike filter)
+			// 4. NPHI physical bounds (Formation neutron porosity spans -0.15 to 1.0 (decimal) or -15 to 100 (percent))
+			if (well.Curves.TryGetValue("NPHI", out var nphiCurveSanitize))
+			{
+				int invalidNphiCount = 0;
+				var values = nphiCurveSanitize.Values;
+
+				var validSamples = values.Where(v => v.HasValue).Select(v => v!.Value).ToList();
+				bool isPercent = false;
+				if (validSamples.Count > 0)
+				{
+					validSamples.Sort();
+					isPercent = validSamples[(int)(validSamples.Count * 0.75)] > 1.0;
+				}
+
+				double lowerBound = isPercent ? -15.0 : -0.15;
+				double upperBound = isPercent ? 100.0 : 1.00;
+
+				for (int i = 0; i < values.Count; i++)
+				{
+					if (values[i].HasValue && (values[i]!.Value < lowerBound || values[i]!.Value > upperBound))
+					{
+						values[i] = null;
+						invalidNphiCount++;
+					}
+				}
+
+				if (invalidNphiCount > 0)
+				{
+					well.ConditioningLogs.Add($"[Sanitize] Replaced {invalidNphiCount} unphysical/error-code values (< {lowerBound} or > {upperBound}) in 'NPHI' ({nphiCurveSanitize.Definition.Mnemonic}) with null.");
+				}
+			}
+
+			// 5. Remove Flatline / Frozen sensor dummy values FIRST (before spike filter)
 			if (well.Curves.TryGetValue("RHOB", out var rhobCurve))
 			{
 				FilterFlatlineValues(rhobCurve, "RHOB", well, minRunLength: 50);
@@ -285,13 +317,13 @@ namespace PetroLogStudio.Conditioning
 				FilterFlatlineValues(resC, "RES", well, minRunLength: 50);
 			}
 
-			// 5. Remove steep edge artifacts adjacent to large null gaps (e.g. casing shoe cement boundary spikes)
+			// 6. Remove steep edge artifacts adjacent to large null gaps (e.g. casing shoe cement boundary spikes)
 			if (well.Curves.TryGetValue("RHOB", out var rhobEdgeCurve))
 			{
 				FilterCasingEdgeArtifacts(rhobEdgeCurve, "RHOB", well, maxJump: 0.15, thresholdValue: 2.50, minGapSize: 50);
 			}
 
-			// 6. Remove isolated non-null spike clusters (surrounded by nulls on both sides)
+			// 7. Remove isolated non-null spike clusters (surrounded by nulls on both sides)
 			if (well.Curves.TryGetValue("RES", out var resSpikeCurve))
 			{
 				FilterIsolatedSpikes(resSpikeCurve, "RES", well);
@@ -300,6 +332,11 @@ namespace PetroLogStudio.Conditioning
 			if (well.Curves.TryGetValue("RHOB", out var rhobSpikeCurve))
 			{
 				FilterIsolatedSpikes(rhobSpikeCurve, "RHOB", well);
+			}
+
+			if (well.Curves.TryGetValue("NPHI", out var nphiSpikeCurve))
+			{
+				FilterIsolatedSpikes(nphiSpikeCurve, "NPHI", well);
 			}
 		}
 

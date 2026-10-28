@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.IO;
 using PetroLogStudio.Parsing;
 using PetroLogStudio.Conditioning;
@@ -31,7 +31,7 @@ namespace PetroLogStudio
 
 		static void Main(string[] args)
 		{
-			string fileName = "s_b080a52a6437d8989146ff25fdd6e124.las";
+			string fileName = "4246138181_UNIV_4_23_1_R1A_Repeat_DSLT_HNGC_HNGS_HGNS_LEH_GenericV12.las";
 			string testFilePath = GetTestDataPath(fileName);
 
 			// 1. Verify file existence before processing
@@ -127,7 +127,7 @@ namespace PetroLogStudio
 
 			// Optional: Entry point for batch processing all LAS files in TestData
 			var batch = new BatchProcessor();
-			batch.ProcessDirectory(FindTestDataDirectory(), @"./outputFolder");
+			// batch.ProcessDirectory(FindTestDataDirectory(), @"./outputFolder");
 		}
 	}
 }

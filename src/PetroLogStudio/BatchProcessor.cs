@@ -26,7 +26,7 @@ namespace PetroLogStudio.Batch
 		private readonly DataConditioner _conditioner = new();
 		private readonly LogPlotter _plotter = new();
 
-		public void ProcessDirectory(string inputDirectory, string outputDirectory)
+		public void ProcessDirectory(string inputDirectory, string outputDirectory, IProgress<(int Current, int Total, string FileName)>? progress = null)
 		{
 			var lasFiles = Directory.GetFiles(inputDirectory, "*.las");
 			Console.WriteLine($"Found {lasFiles.Length} LAS files for processing.\n");
@@ -41,6 +41,7 @@ namespace PetroLogStudio.Batch
 			{
 				string filePath = lasFiles[i];
 				string fileName = Path.GetFileName(filePath);
+				progress?.Report((i + 1, lasFiles.Length, fileName));
 				Console.Write($"[{i + 1}/{lasFiles.Length}] Processing: {fileName,-45} ");
 
 				stopwatch.Restart();

@@ -21,6 +21,7 @@ namespace PetroLogStudio.Parsing
 	public class LasParser
 	{
 		private static readonly char[] WhitespaceChars = { ' ', '\t' };
+		private static readonly char[] DelimiterChars = { ' ', '\t', ',' };
 
 		public WellLog ParseFile(string filePath)
 		{
@@ -79,7 +80,7 @@ namespace PetroLogStudio.Parsing
 
 						if (currentSection == LasSection.AsciiData)
 						{
-							int spaceIdx = line.IndexOfAny(WhitespaceChars);
+							int spaceIdx = line.IndexOfAny(DelimiterChars);
 							if (spaceIdx > 0)
 							{
 								ReadOnlySpan<char> remainder = lineSpan.Slice(spaceIdx).Trim();
@@ -248,18 +249,21 @@ namespace PetroLogStudio.Parsing
 
 			while (!line.IsEmpty)
 			{
-				int spaceIndex = line.IndexOfAny(WhitespaceChars);
+				line = line.TrimStart(DelimiterChars);
+				if (line.IsEmpty) break;
+
+				int delimIndex = line.IndexOfAny(DelimiterChars);
 
 				ReadOnlySpan<char> token;
 
-				if (spaceIndex >= 0)
+				if (delimIndex >= 0)
 				{
-					token = line.Slice(0, spaceIndex);
-					line = line.Slice(spaceIndex + 1).TrimStart();
+					token = line.Slice(0, delimIndex).Trim(DelimiterChars);
+					line = line.Slice(delimIndex + 1).TrimStart(DelimiterChars);
 				}
 				else
 				{
-					token = line;
+					token = line.Trim(DelimiterChars);
 					line = ReadOnlySpan<char>.Empty;
 				}
 

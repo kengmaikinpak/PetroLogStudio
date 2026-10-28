@@ -11,18 +11,18 @@ namespace PetroLogStudio.Plotting
 	/// </summary>
 	public class LogPlotter
 	{
-		public void GenerateWellPlot(WellLog well, string outputDirectory)
+		public string? GenerateWellPlot(WellLog well, string outputDirectory)
 		{
 			if (!well.Curves.TryGetValue("DEPT", out var deptCurve) || deptCurve.Values.Count == 0)
 			{
 				Console.WriteLine($"[Plot Error] Well '{well.WellName}' does not contain depth data. Plotting skipped.");
-				return;
+				return null;
 			}
 
 			double[] depths = deptCurve.Values.Select(v => v ?? double.NaN).ToArray();
 			var validDepths = depths.Where(d => !double.IsNaN(d)).ToList();
 
-			if (validDepths.Count == 0) return;
+			if (validDepths.Count == 0) return null;
 
 			double minDepth = validDepths.Min();
 			double maxDepth = validDepths.Max();
@@ -57,6 +57,7 @@ namespace PetroLogStudio.Plotting
 
 			multiplot.SavePng(outputPath, 1200, 1600);
 			Console.WriteLine($"[Plot Success] Generated composite log: {outputPath}");
+			return outputPath;
 		}
 
 		private void SetupTrack1(Plot plot, WellLog well, double[] depths, double minDepth, double maxDepth)
@@ -159,11 +160,22 @@ namespace PetroLogStudio.Plotting
 			{
 				var rhobValues = rhobCurve?.Values;
 
-				// Curve-level unit detection: check unit string or max value across entire valid curve
-				string unit = nphiCurve.Definition.Unit.ToUpperInvariant().Trim();
-				bool isPercentUnit = unit.Contains("%") || unit.Contains("PERC") || unit.Contains("PU");
-				double maxNphi = nphiCurve.Values.Where(v => v.HasValue).Select(v => v!.Value).DefaultIfEmpty(0).Max();
-				bool needsPercentConversion = isPercentUnit || maxNphi > 1.5;
+				// Curve-level unit detection: check whether values are in percentage scale (e.g. 15-40 PU) or decimal scale (0.15-0.40)
+				// Note: Some legacy LAS headers declare Unit='%' but store decimal values (e.g. 0.15 instead of 15%)
+				var validNphiSamples = nphiCurve.Values
+					.Where(v => v.HasValue && !double.IsNaN(v.Value) && v.Value > -0.5 && v.Value < 150)
+					.Select(v => v!.Value)
+					.ToList();
+
+				double medianOrHighNphi = 0;
+				if (validNphiSamples.Count > 0)
+				{
+					validNphiSamples.Sort();
+					medianOrHighNphi = validNphiSamples[(int)(validNphiSamples.Count * 0.75)]; // 75th percentile
+				}
+
+				// If 75% of data is > 1.0 (or max is typically > 1.5), it is in true percentage scale (e.g. 15 to 45%)
+				bool needsPercentConversion = medianOrHighNphi > 1.0;
 
 				double[] normalizedNphi = nphiCurve.Values.Select((v, idx) =>
 				{
