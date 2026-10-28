@@ -1,7 +1,6 @@
 using System;
 using System.IO;
 using System.Linq;
-using System.Runtime.Serialization;
 using PetroLogStudio.Models;
 using ScottPlot;
 
@@ -44,9 +43,17 @@ namespace PetroLogStudio.Plotting
 			Plot track3 = multiplot.GetPlot(2);
 			SetupTrack3(track3, well, depths, minDepth, maxDepth);
 
-			Directory.CreateDirectory(outputDirectory);
-			string sanitizesName = string.Join("_", well.WellName.Split(Path.GetInvalidFileNameChars()));
-			string outputPath = Path.Combine(outputDirectory, $"{sanitizesName}_3Track.png");
+			string sanitizedWellName = string.Join("_", well.WellName.Split(Path.GetInvalidFileNameChars())).Trim();
+			if (string.IsNullOrEmpty(sanitizedWellName))
+			{
+				sanitizedWellName = "Unknown_Well";
+			}
+
+			string wellFolder = Path.Combine(outputDirectory, sanitizedWellName);
+			Directory.CreateDirectory(wellFolder);
+
+			string filePrefix = !string.IsNullOrEmpty(well.FilePath) ? Path.GetFileNameWithoutExtension(well.FilePath) : sanitizedWellName;
+			string outputPath = Path.Combine(wellFolder, $"{filePrefix}_3Track.png");
 
 			multiplot.SavePng(outputPath, 1200, 1600);
 			Console.WriteLine($"[Plot Success] Generated composite log: {outputPath}");
@@ -61,16 +68,16 @@ namespace PetroLogStudio.Plotting
 			plot.Axes.SetLimitsY(bottom: maxDepth, top: minDepth);
 			plot.Axes.SetLimitsX(0, 150, plot.Axes.Bottom);
 
-			if (well.Curves.TryGetValue("GR", out var grCurve))
+			if (well.Curves.TryGetValue("GR", out var grCurve) && grCurve.Values.Any(v => v.HasValue))
 			{
 				double[] grValues = grCurve.Values.Select(v => v ?? double.NaN).ToArray();
 				var scatter = plot.Add.ScatterLine(xs: grValues, ys: depths);
-				scatter.Color = Colors.ForestGreen;
+				scatter.Color = Colors.C1;
 				scatter.LineWidth = 1.5f;
 			}
 			else
 			{
-				plot.Add.Text("GR Not Available", 75, (minDepth + maxDepth) / 2);
+				plot.Add.Text("GR Not Available", 50, (minDepth + maxDepth) / 2);
 			}
 		}
 
@@ -95,20 +102,20 @@ namespace PetroLogStudio.Plotting
 			string[] tickLabels = new[] { "0.2", "1", "10", "100", "1k", "2k" };
 			plot.Axes.Bottom.SetTicks(tickPositions, tickLabels);
 
-			if (well.Curves.TryGetValue("RES", out var resCurve))
+			if (well.Curves.TryGetValue("RES", out var resCurve) && resCurve.Values.Any(v => v.HasValue && v.Value > 0))
 			{
 				double[] logResValues = resCurve.Values
 					.Select(v => (v.HasValue && v.Value > 0) ? Math.Log10(v.Value) : double.NaN)
 					.ToArray();
 
 				var scatter = plot.Add.ScatterLine(xs: logResValues, ys: depths);
-				scatter.Color = Colors.Crimson;
+				scatter.Color = Colors.ForestGreen;
 				scatter.LineWidth = 1.2f;
 				scatter.LegendText = $"{resCurve.Definition.Mnemonic} (Deep)";
 			}
 			else
 			{
-				plot.Add.Text("Resistivity Not Available", Math.Log10(20), (minDepth + maxDepth) / 2);
+				plot.Add.Text("Resistivity Not Available", Math.Log10(3), (minDepth + maxDepth) / 2);
 			}
 
 			plot.ShowLegend(Alignment.UpperRight);
@@ -134,7 +141,7 @@ namespace PetroLogStudio.Plotting
 			plot.Axes.Bottom.SetTicks(rhobTicks, rhobLabels);
 
 			// 1. RHOB (Solid Red)
-			bool hasRhob = well.Curves.TryGetValue("RHOB", out var rhobCurve);
+			bool hasRhob = well.Curves.TryGetValue("RHOB", out var rhobCurve) && rhobCurve != null && rhobCurve.Values.Any(v => v.HasValue);
 
 			if (hasRhob && rhobCurve != null)
 			{
@@ -146,25 +153,38 @@ namespace PetroLogStudio.Plotting
 			}
 
 			// 2. NPHI (Dashed or Solid Blue)
-			if (well.Curves.TryGetValue("NPHI", out var nphiCurve))
+			bool hasNphi = well.Curves.TryGetValue("NPHI", out var nphiCurve) && nphiCurve != null && nphiCurve.Values.Any(v => v.HasValue);
+
+			if (hasNphi && nphiCurve != null)
 			{
 				var rhobValues = rhobCurve?.Values;
+
+				// Curve-level unit detection: check unit string or max value across entire valid curve
+				string unit = nphiCurve.Definition.Unit.ToUpperInvariant().Trim();
+				bool isPercentUnit = unit.Contains("%") || unit.Contains("PERC") || unit.Contains("PU");
+				double maxNphi = nphiCurve.Values.Where(v => v.HasValue).Select(v => v!.Value).DefaultIfEmpty(0).Max();
+				bool needsPercentConversion = isPercentUnit || maxNphi > 1.5;
 
 				double[] normalizedNphi = nphiCurve.Values.Select((v, idx) =>
 				{
 					if (!v.HasValue || double.IsNaN(v.Value)) return double.NaN;
 
-					if (rhobValues != null && idx < rhobValues.Count)
+					// If RHOB is available in this well, synchronize casing cutoffs (mask out casing intervals)
+					if (hasRhob && rhobValues != null && idx < rhobValues.Count)
 					{
 						if (!rhobValues[idx].HasValue || double.IsNaN(rhobValues[idx]!.Value))
+						{
 							return double.NaN;
+						}
 					}
 
 					double n = v.Value;
-					// Convert % to decimal
-					if (n > 1.0) n /= 100.0;
+					if (needsPercentConversion)
+					{
+						n /= 100.0;
+					}
 
-					// Filter out unreasonable values
+					// Filter out unreasonable values (-0.15 to 0.60)
 					if (n < -0.15 || n > 0.60) return double.NaN;
 
 					// Linear mapping: 0.45 -> 1.95 and -0.15 -> 2.95
@@ -177,9 +197,9 @@ namespace PetroLogStudio.Plotting
 				nphiScatter.LegendText = $"NPHI ({nphiCurve.Definition.Mnemonic})";
 			}
 
-			if (!well.Curves.ContainsKey("RHOB") && !well.Curves.ContainsKey("NPHI"))
+			if (!hasRhob && !hasNphi)
 			{
-				plot.Add.Text("RHOB / NPHI Not Available", 2.45, (minDepth + maxDepth) / 2);
+				plot.Add.Text("RHOB / NPHI Not Available", 2.15, (minDepth + maxDepth) / 2);
 			}
 
 			plot.ShowLegend(Alignment.UpperRight);

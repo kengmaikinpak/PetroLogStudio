@@ -41,6 +41,8 @@ namespace PetroLogStudio.Parsing
 			var orderedCurves = new List<CurveData>();
 			int currentColumn = 0;
 
+			int lineNumber = 0;
+
 			try
 			{
 				using var reader = new StreamReader(filePath);
@@ -48,8 +50,17 @@ namespace PetroLogStudio.Parsing
 
 				while ((line = reader.ReadLine()) != null)
 				{
+					lineNumber++;
+
+					// Filter out corrupted binary / control characters
+					if (line.Contains('\0') || line.Any(c => char.IsControl(c) && c != '\t' && c != '\r' && c != '\n'))
+					{
+						well.ParseNotices.Add($"Corrupted binary line detected and skipped at line {lineNumber}.");
+						continue;
+					}
+
 					// Remove whitespace and the SUB character (ASCII 0x1A)
-					ReadOnlySpan<char> lineSpan = line.AsSpan().Trim().Trim('\u001A'); ;
+					ReadOnlySpan<char> lineSpan = line.AsSpan().Trim().Trim('\u001A');
 
 					if (lineSpan.IsEmpty || lineSpan[0] == '#')
 					{
@@ -58,9 +69,37 @@ namespace PetroLogStudio.Parsing
 
 					if (lineSpan[0] == '~')
 					{
+						if (currentSection == LasSection.AsciiData && orderedCurves.Count > 0 && orderedCurves[0].Values.Count > 0)
+						{
+							well.ParseNotices.Add($"Detected secondary data section ({lineSpan.ToString()}). Extracted primary logging run; secondary interpretation section omitted for standard 3-track composite.");
+							break;
+						}
+
 						currentSection = DetermineSection(lineSpan);
+
+						if (currentSection == LasSection.AsciiData)
+						{
+							int spaceIdx = line.IndexOfAny(WhitespaceChars);
+							if (spaceIdx > 0)
+							{
+								ReadOnlySpan<char> remainder = lineSpan.Slice(spaceIdx).Trim();
+
+								if (!remainder.IsEmpty && (char.IsDigit(remainder[0]) || remainder[0] == '-' || remainder[0] == '+'))
+								{
+									ParseDataLine(remainder, well, orderedCurves, ref currentColumn);
+								}
+							}
+						}
+
 						continue;
 					}
+
+					if (line.Contains('\0') || line.Any(c => char.IsControl(c) && c != '\t' && c != '\r' && c != '\n'))
+					{
+						well.ParseNotices.Add($"Corrupted binary line detected and skipped at line {lineNumber}.");
+						continue;
+					}
+
 
 					switch (currentSection)
 					{
@@ -77,12 +116,26 @@ namespace PetroLogStudio.Parsing
 				}
 				if (currentColumn != 0)
 				{
+					for (int col = 0; col < currentColumn; col++)
+					{
+						var vals = orderedCurves[col].Values;
+						if (vals.Count > 0)
+						{
+							vals.RemoveAt(vals.Count - 1);
+						}
+					}
 					well.ParseErrors.Add($"Incomplete data row at end of file: {currentColumn} of {orderedCurves.Count} expected values were read and discarded.");
 				}
 			}
 			catch (Exception ex)
 			{
 				well.ParseErrors.Add($"Critical read error: {ex.Message}");
+			}
+
+			if (string.IsNullOrWhiteSpace(well.WellName) || well.WellName.Equals("Well Name", StringComparison.OrdinalIgnoreCase))
+			{
+				well.WellName = Path.GetFileNameWithoutExtension(filePath);
+				well.ParseNotices.Add($"Valid well name not found in header. Used file name '{well.WellName}' as fallback.");
 			}
 
 			return well;
@@ -110,9 +163,20 @@ namespace PetroLogStudio.Parsing
 			{
 				case "WELL":
 					string wellNameCandidate = value;
+
+					string[] genericDescriptions = new[] { "WELL NAME", "WELL", "WELLNAME", "NAME" };
+					bool isGenericDesc = genericDescriptions.Any(g => g.Equals(description, StringComparison.OrdinalIgnoreCase));
+
 					if (string.IsNullOrWhiteSpace(wellNameCandidate) || wellNameCandidate.Equals("WELL", StringComparison.OrdinalIgnoreCase))
 					{
-						wellNameCandidate = description;
+						if (!string.IsNullOrWhiteSpace(description) && !isGenericDesc)
+						{
+							wellNameCandidate = description;
+						}
+						else
+						{
+							wellNameCandidate = string.Empty;
+						}
 					}
 
 					if (!string.IsNullOrWhiteSpace(wellNameCandidate))
@@ -204,7 +268,22 @@ namespace PetroLogStudio.Parsing
 				double? valToAdd = null;
 				if (double.TryParse(token, NumberStyles.Float | NumberStyles.AllowThousands, CultureInfo.InvariantCulture, out double value))
 				{
-					if (!nullVal.HasValue || Math.Abs(value - nullVal.Value) >= 0.001)
+					bool isNull = false;
+					if (nullVal.HasValue)
+					{
+						// Check exact tolerance or common truncation (e.g. Header has -999.25 but data has -999.2 or -999)
+						if (Math.Abs(value - nullVal.Value) < 0.1 ||
+						    (Math.Abs(nullVal.Value - (-999.25)) < 0.1 && (Math.Abs(value - (-999.2)) < 0.05 || Math.Abs(value - (-999.25)) < 0.05 || Math.Abs(value - (-999.0)) < 0.05)))
+						{
+							isNull = true;
+						}
+					}
+					else if (Math.Abs(value - (-999.25)) < 0.1 || Math.Abs(value - (-999.2)) < 0.05 || Math.Abs(value - (-999.0)) < 0.05)
+					{
+						isNull = true;
+					}
+
+					if (!isNull)
 					{
 						valToAdd = value;
 					}
@@ -226,6 +305,12 @@ namespace PetroLogStudio.Parsing
 			int colonIndex = line.IndexOf(':');
 			ReadOnlySpan<char> mainPart = colonIndex >= 0 ? line.Slice(0, colonIndex).Trim() : line;
 			string description = colonIndex >= 0 ? line.Slice(colonIndex + 1).Trim().ToString() : string.Empty;
+
+			// Handle leading dot if present (e.g. .DT57.USEC/FT)
+			if (mainPart.StartsWith("."))
+			{
+				mainPart = mainPart.TrimStart('.');
+			}
 
 			// Split mainPart into mnemonic and unit
 			int dotIndex = mainPart.IndexOf('.');

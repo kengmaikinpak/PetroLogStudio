@@ -3,34 +3,38 @@ using System.IO;
 using PetroLogStudio.Parsing;
 using PetroLogStudio.Conditioning;
 using PetroLogStudio.Plotting;
+using PetroLogStudio.Batch;
 
 namespace PetroLogStudio
 {
 	internal class Program
 	{
-		static string GetTestDataPath(string fileName)
+		static string FindTestDataDirectory()
 		{
 			var currentDir = new DirectoryInfo(AppDomain.CurrentDomain.BaseDirectory);
-
 			while (currentDir != null)
 			{
-				string candidatePath = Path.Combine(currentDir.FullName, "TestData", fileName);
-				if (File.Exists(candidatePath))
+				string candidate = Path.Combine(currentDir.FullName, "TestData");
+				if (Directory.Exists(candidate))
 				{
-					return candidatePath;
+					return candidate;
 				}
-
 				currentDir = currentDir.Parent;
 			}
+			return Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "TestData");
+		}
 
-			return Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "TestData", fileName);
+		static string GetTestDataPath(string fileName)
+		{
+			return Path.Combine(FindTestDataDirectory(), fileName);
 		}
 
 		static void Main(string[] args)
 		{
-			string fileName = "4231735947_OPAL_UNIVERSITY_6-15_2_RTEX_ZDL_CN_DSL_MAIN_LAS.las";
+			string fileName = "s_b080a52a6437d8989146ff25fdd6e124.las";
 			string testFilePath = GetTestDataPath(fileName);
 
+			// 1. Verify file existence before processing
 			if (!File.Exists(testFilePath))
 			{
 				Console.WriteLine($"[ERROR] File not found at: {testFilePath}");
@@ -40,9 +44,14 @@ namespace PetroLogStudio
 			Console.WriteLine($"Testing LasParser with: {Path.GetFileName(testFilePath)}");
 			Console.WriteLine(new string('-', 50));
 
+			// 2. Parse & Condition well data
 			var parser = new LasParser();
 			var well = parser.ParseFile(testFilePath);
 
+			var conditioner = new DataConditioner();
+			conditioner.ConditionWell(well);
+
+			// 3. Print diagnostic info to Console
 			Console.WriteLine("\n[1] Well Header Information:");
 			Console.WriteLine($"Well Name   : {well.WellName}");
 			Console.WriteLine($"Null Value  : {well.NullValue}");
@@ -73,22 +82,31 @@ namespace PetroLogStudio
 				Console.WriteLine("Warning: 'DEPT' mnemonic not found directly. Check available curve keys.");
 			}
 
-			Console.WriteLine("\n[4] Parse Errors & Warnings:");
-			if (well.ParseErrors.Count == 0)
+			Console.WriteLine("\n[4] Parser Diagnostics:");
+			if (well.ParseErrors.Count == 0 && well.ParseNotices.Count == 0)
 			{
-				Console.WriteLine("No parsing errors encountered! Clean parse.");
+				Console.WriteLine("No parsing errors or notices encountered! Clean parse.");
 			}
 			else
 			{
-				Console.WriteLine($"Total errors: {well.ParseErrors.Count}");
-				foreach (var err in well.ParseErrors)
+				if (well.ParseErrors.Count > 0)
 				{
-					Console.WriteLine($"  ! {err}");
+					Console.WriteLine($"Errors ({well.ParseErrors.Count}):");
+					foreach (var err in well.ParseErrors)
+					{
+						Console.WriteLine($"  ! [Error] {err}");
+					}
+				}
+
+				if (well.ParseNotices.Count > 0)
+				{
+					Console.WriteLine($"Notices ({well.ParseNotices.Count}):");
+					foreach (var note in well.ParseNotices)
+					{
+						Console.WriteLine($"  * [Notice] {note}");
+					}
 				}
 			}
-
-			var conditioner = new PetroLogStudio.Conditioning.DataConditioner();
-			conditioner.ConditionWell(well);
 
 			Console.WriteLine("\n[5] Data Conditioning Report:");
 			foreach (var log in well.ConditioningLogs)
@@ -103,8 +121,13 @@ namespace PetroLogStudio
 				Console.WriteLine($"  Last Depth : {conditionedDept.Values[^1]}");
 			}
 
-			var plotter = new PetroLogStudio.Plotting.LogPlotter();
+			// 4. Generate composite log plot
+			var plotter = new LogPlotter();
 			plotter.GenerateWellPlot(well, "output_plots");
+
+			// Optional: Entry point for batch processing all LAS files in TestData
+			var batch = new BatchProcessor();
+			batch.ProcessDirectory(FindTestDataDirectory(), @"./outputFolder");
 		}
 	}
 }
